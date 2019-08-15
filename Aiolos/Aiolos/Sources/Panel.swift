@@ -230,7 +230,7 @@ internal extension Panel {
         let height: CGFloat
         switch mode {
         case .minimal:
-            height = 0.0
+            height = delegateSize.height
         case .fullHeight:
             let screen = parent.view.window?.screen ?? UIScreen.main
             height = screen.fixedCoordinateSpace.bounds.height
