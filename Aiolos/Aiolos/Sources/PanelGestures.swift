@@ -8,6 +8,7 @@
 
 import Foundation
 
+// swiftlint:disable file_length
 
 /// Manages Gestures added to the Panel
 final class PanelGestures: NSObject {
@@ -189,7 +190,11 @@ private extension PanelGestures {
         private func handlePanEnded(_ pan: UIPanGestureRecognizer) {
             guard let context = self.repositionContext(pan: pan) else { return }
 
-            let instruction = self.panel.animator.notifyDelegateOfMove(to: self.panel.view.frame, context: context)
+            var instruction = self.panel.animator.notifyDelegateOfMove(to: self.panel.view.frame, context: context)
+            if case .hide = instruction, let repositionDelegate = self.panel.repositionDelegate, repositionDelegate.panelCanBeDismissed(self.panel) == false {
+                instruction = .none
+            }
+
             switch instruction {
             case .none:
                 let originalPosition = self.panel.configuration.position
@@ -370,8 +375,6 @@ private extension PanelGestures {
         }
 
         private func handlePanChanged(_ pan: PanGestureRecognizer) {
-            guard let parentView = self.panel.parent?.view else { return }
-
             func dragOffset(for translation: CGPoint) -> CGFloat {
                 let fudgeFactor: CGFloat = 60.0
                 let minHeight = self.height(for: .compact) + fudgeFactor
@@ -430,7 +433,7 @@ private extension PanelGestures {
             }
         }
 
-        // swiftlint:disable cyclomatic_complexity
+        // swiftlint:disable:next cyclomatic_complexity
         private func targetMode(for pan: PanGestureRecognizer) -> Panel.Configuration.Mode {
             let supportedModes = self.panel.configuration.supportedModes
             guard let originalConfiguration = self.originalConfiguration else { return supportedModes.first! }
@@ -489,7 +492,6 @@ private extension PanelGestures {
                 return originalConfiguration.mode
             }
         }
-        // swiftlint:enable cyclomatic_complexity
 
         private func cleanUp(pan: PanGestureRecognizer) {
             pan.cancelsTouchesInView = false
@@ -539,7 +541,6 @@ private extension PanelGestures {
             self.panel.animator.animateWithTiming(timing, animations: {
                 self.panel.constraints.updateForPanEndAnimation(to: height)
                 self.panel.animator.notifyDelegateOfTransition(to: size)
-                self.panel.fixNavigationBarLayoutMargins()
             }, completion: {
                 self.panel.constraints.updateSizeConstraints(for: size)
             })
