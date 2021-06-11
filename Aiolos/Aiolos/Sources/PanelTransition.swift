@@ -6,7 +6,7 @@
 //  Copyright © 2017 Matthias Tretter. All rights reserved.
 //
 
-import Foundation
+import UIKit
 
 
 /// Enum that can be used to modify the panel's initial appearance/disappearance transition
@@ -22,7 +22,7 @@ public extension Panel {
         case fade
         case slide(direction: Direction)
 
-        var isAnimated: Bool {
+        public var isAnimated: Bool {
             switch self {
             case .none:
                 return false

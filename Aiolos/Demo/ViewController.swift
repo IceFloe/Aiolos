@@ -126,12 +126,12 @@ extension ViewController: PanelResizeDelegate {
 
 extension ViewController: PanelRepositionDelegate {
 
-    func panelCanBeDismissed(_ panel: Panel) -> Bool {
-        return true
+    func panelCanStartMoving(_ panel: Panel) -> Bool {
+        return self.traitCollection.userInterfaceIdiom == .pad
     }
 
-    func panelDidStartMoving(_ panel: Panel) {
-        print("Panel did start moving")
+    func panelCanBeDismissed(_ panel: Panel) -> Bool {
+        return true
     }
 
     func panel(_ panel: Panel, willMoveTo frame: CGRect) -> Bool {
@@ -178,13 +178,13 @@ extension ViewController: PanelRepositionDelegate {
 
 extension ViewController: UIGestureRecognizerDelegate {
 
-    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
-        guard let contentNavigationController = self.panelController.contentViewController as? UINavigationController else { return true }
-        guard let tableViewController = contentNavigationController.topViewController as? UITableViewController else { return true }
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+        guard let contentNavigationController = self.panelController.contentViewController as? UINavigationController else { return false }
+        guard let tableViewController = contentNavigationController.topViewController as? UITableViewController else { return false }
 
         // Prevent swipes on the table view being triggered as the panel is being dragged horizontally
         // More info: https://github.com/IdeasOnCanvas/Aiolos/issues/23
-        return otherGestureRecognizer.view !== tableViewController.tableView
+        return otherGestureRecognizer.view === tableViewController.tableView
     }
 }
 
@@ -232,12 +232,10 @@ private extension ViewController {
 
         if self.traitCollection.userInterfaceIdiom == .pad {
             configuration.supportedPositions = [.leadingBottom, .trailingBottom]
-            configuration.isHorizontalPositioningEnabled = true
             configuration.appearance.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner, .layerMinXMaxYCorner, .layerMaxXMaxYCorner]
         } else {
             configuration.supportedModes = [.minimal, .compact, .expanded, .fullHeight]
             configuration.supportedPositions = [configuration.position]
-            configuration.isHorizontalPositioningEnabled = false
 
             if traitCollection.hasNotch {
                 configuration.appearance.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner, .layerMinXMaxYCorner, .layerMaxXMaxYCorner]

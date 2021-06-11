@@ -6,7 +6,7 @@
 //  Copyright © 2017 Matthias Tretter. All rights reserved.
 //
 
-import Foundation
+import UIKit
 
 
 /// Internal class used to drive animations of the Panel
@@ -17,8 +17,8 @@ final class PanelAnimator {
 
     var animateChanges: Bool = true
     var transitionCoordinatorQueuedAnimations: [PanelTransitionCoordinator.Animation] = []
-    var isTransitioningToParent: Bool = false
-    var isTransitioningFromParent: Bool = false
+    var isMovingToParent: Bool = false
+    var isMovingFromParent: Bool = false
 
     // MARK: - Lifecycle
 
@@ -40,16 +40,7 @@ final class PanelAnimator {
     }
 
     func performWithoutAnimation(_ changes: @escaping () -> Void) {
-        let animateBefore = self.animateChanges
-        self.animateChanges = false
-        defer { self.animateChanges = animateBefore }
-
-        self.animateIfNeeded {
-            UIView.performWithoutAnimation {
-                changes()
-                self.panel.parent?.view?.layoutIfNeeded()
-            }
-        }
+        self.performChanges({ UIView.performWithoutAnimation(changes) }, animated: false, timing: UISpringTimingParameters())
     }
 
     func stopCurrentAnimation() {
@@ -57,6 +48,8 @@ final class PanelAnimator {
         guard let animator = self.animator else { return }
         guard animator.state == .active else { return }
 
+        animator.pauseAnimation()
+        animator.fractionComplete = 1.0
         animator.stopAnimation(false)
         animator.finishAnimation(at: .end)
     }
@@ -89,11 +82,11 @@ final class PanelAnimator {
         }
     }
 
-    func notifyDelegateOfRepositioning() {
-        guard let repositionDelegate = self.panel.repositionDelegate else { return }
-        guard self.panel.isVisible else { return }
+    func askDelegateAboutStartOfMove() -> Bool {
+        guard let repositionDelegate = self.panel.repositionDelegate else { return false }
+        guard self.panel.isVisible else { return false }
 
-        repositionDelegate.panelDidStartMoving(self.panel)
+        return repositionDelegate.panelCanStartMoving(self.panel)
     }
 
     func askDelegateAboutMove(to frame: CGRect) -> Bool {
@@ -131,10 +124,10 @@ final class PanelAnimator {
 
 extension PanelAnimator {
 
-    func transitionToParent(with size: CGSize, transition: Panel.Transition, completion: @escaping () -> Void) {
-        guard self.isTransitioningToParent == false else { return }
+    func addToParent(with size: CGSize, transition: Panel.Transition, completion: @escaping () -> Void) {
+        guard self.isMovingToParent == false else { return }
 
-        self.isTransitioningToParent = true
+        self.isMovingToParent = true
         self.stopCurrentAnimation()
         self.prepare(for: transition, size: size)
         self.performWithoutAnimation {
@@ -145,25 +138,25 @@ extension PanelAnimator {
         self.notifyDelegateOfTransition(to: size)
         self.notifyDelegateOfTransition(from: nil, to: self.panel.configuration.mode)
         self.finalizeTransition(transition) {
-            self.isTransitioningToParent = false
+            self.isMovingToParent = false
             completion()
         }
     }
 
     func removeFromParent(transition: Panel.Transition, completion: @escaping () -> Void) {
-        guard self.isTransitioningFromParent == false else { return }
+        guard self.isMovingFromParent == false else { return }
 
-        self.isTransitioningFromParent = true
+        self.isMovingFromParent = true
         self.stopCurrentAnimation()
 
-        let animator = UIViewPropertyAnimator(duration: Constants.Animation.duration, timingParameters: UISpringTimingParameters())
+        let animator = UIViewPropertyAnimator(duration: Panel.Constants.Animation.duration, timingParameters: UISpringTimingParameters())
 
         func finish() {
-            completion()
             self.resetPanel()
             self.panel.constraints.updateForPanEndAnimation(to: self.panel.view.bounds.height)
             self.panel.constraints.updateForPanEnd()
-            self.isTransitioningFromParent = false
+            self.isMovingFromParent = false
+            completion()
         }
 
         switch transition {
@@ -215,42 +208,49 @@ extension PanelAnimator {
 
 private extension PanelAnimator {
 
-    struct Constants {
-        struct Animation {
-            static let duration: TimeInterval = 0.42
-        }
-    }
-
     func performChanges(_ changes: @escaping () -> Void, animated: Bool, timing: UITimingCurveProvider, completion: (() -> Void)? = nil) {
         guard let parentView = self.panel.parent?.view else { return }
 
-        self.stopCurrentAnimation()
-        if animated == false {
-            parentView.layoutIfNeeded()
-        }
-
-        let animator = UIViewPropertyAnimator(duration: Constants.Animation.duration, timingParameters: timing)
-        animator.addAnimations {
+        let changesAndLayout = {
             changes()
             parentView.layoutIfNeeded()
             self.panel.fixLayoutMargins()
         }
-        if let completion = completion {
-            animator.addCompletion { _ in completion() }
-        }
 
-        // we might have enqueued animations from a transition coordinator, perform them along the main changes
-        self.addQueuedAnimations(to: animator)
+        self.stopCurrentAnimation()
 
-        // if we don't want to animate, perform changes directly by setting the completion state to 100 %
-        if animated == false {
-            animator.fractionComplete = 1.0
-            animator.stopAnimation(false)
-            animator.finishAnimation(at: .end)
-        } else {
+        if animated {
+            parentView.layoutIfNeeded()
+
+            let animator = UIViewPropertyAnimator(duration: Panel.Constants.Animation.duration, timingParameters: timing)
+            animator.addAnimations(changesAndLayout)
+            if let completion = completion {
+                animator.addCompletion { _ in completion() }
+            }
+
+            // we might have enqueued animations from a transition coordinator, perform them along the main changes
+            self.addQueuedAnimations(to: animator)
+
             animator.startAnimation()
             self.animator = animator
+        } else {
+            // if we don't want to animate, perform changes directly and manually call alongside-"animations" and completion
+            changesAndLayout()
+            self.manuallyCallQueuedAnimations()
+            completion?()
         }
+    }
+
+    func manuallyCallQueuedAnimations() {
+        let queuedAnimations = self.transitionCoordinatorQueuedAnimations
+        // reset the queued animations immediately, in case any queued block has side-effects
+        // that trigger animations again
+        self.transitionCoordinatorQueuedAnimations = []
+
+        // first call animation blocks
+        queuedAnimations.forEach { $0.animations() }
+        // then completion blocks
+        queuedAnimations.forEach { $0.completion?(.end) }
     }
 
     func addQueuedAnimations(to animator: UIViewPropertyAnimator) {
@@ -265,9 +265,11 @@ private extension PanelAnimator {
     }
 
     func prepare(for transition: Panel.Transition, size: CGSize) {
+        self.animateChanges = transition.isAnimated
+
         switch transition {
         case .none:
-            break
+            self.resetPanel()
         case .fade:
             self.panel.view.alpha = 0.0
         case .slide(let direction):
@@ -279,19 +281,30 @@ private extension PanelAnimator {
         self.panel.view.alpha = 1.0
         self.panel.view.transform = .identity
         self.panel.fixLayoutMargins()
+        // Hack on top of a hack: delaying to the next run-loop fixes a glitch,
+        // when adding the panel to a parent animated within an unsafe area
+        DispatchQueue.main.async { [weak self] in
+            self?.panel.fixLayoutMargins()
+        }
     }
 
     func finalizeTransition(_ transition: Panel.Transition, completion: @escaping () -> Void) {
-        let animator = UIViewPropertyAnimator(duration: Constants.Animation.duration, timingParameters: UISpringTimingParameters())
-        animator.addAnimations(self.resetPanel)
-        animator.addCompletion { _ in completion() }
-        self.addQueuedAnimations(to: animator)
+        switch transition {
+        case .none:
+            self.animator = nil
+            self.resetPanel()
+            self.manuallyCallQueuedAnimations()
+            completion()
+        case .fade, .slide:
+            let animator = UIViewPropertyAnimator(duration: Panel.Constants.Animation.duration, timingParameters: UISpringTimingParameters())
+            animator.addAnimations(self.resetPanel)
+            animator.addCompletion { _ in completion() }
+            self.addQueuedAnimations(to: animator)
 
-        if case .none = transition {
-            animator.fractionComplete = 1.0
+            animator.startAnimation()
+            self.animator = animator
         }
 
-        animator.startAnimation()
-        self.animator = animator
+        self.animateChanges = true
     }
 }

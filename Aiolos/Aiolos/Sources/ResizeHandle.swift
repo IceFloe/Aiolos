@@ -6,7 +6,7 @@
 //  Copyright © 2017 Matthias Tretter. All rights reserved.
 //
 
-import Foundation
+import UIKit
 
 
 /// View that is used to display the resize handle
@@ -57,7 +57,7 @@ public final class ResizeHandle: UIView {
         self.addSubview(self.resizeHandle)
         self.configure(with: configuration)
 
-        if #available(iOS 13.4, *) {
+        if #available(iOS 13.4, *), NSClassFromString("UIPointerInteraction") != nil {
             let pointerInteraction = UIPointerInteraction(delegate: self)
             self.addInteraction(pointerInteraction)
         }
@@ -81,7 +81,7 @@ public final class ResizeHandle: UIView {
 
         self.handleColor = foregroundColor
         self.backgroundColor = backgroundColor
-        self.resizeHandle.alpha = configuration.gestureResizingMode != .disabled && configuration.supportedModes.count > 1 ? 1.0 : 0.2
+        self.resizeHandle.alpha = configuration.gestureResizingMode.contains(.handle) && configuration.supportedModes.count > 1 ? 1.0 : 0.2
     }
 }
 

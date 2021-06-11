@@ -6,14 +6,13 @@
 //  Copyright © 2017 Matthias Tretter. All rights reserved.
 //
 
-import Foundation
+import UIKit
 
 
 /// A floating Panel inspired by the iOS 11 Maps.app UI
 @objc
 public final class Panel: UIViewController {
 
-    private(set) lazy var resizeHandle: ResizeHandle = self.makeResizeHandle()
     private var shadowView: ShadowView? { return self.viewIfLoaded as? ShadowView }
     private var containerView: ContainerView? { return self.viewIfLoaded?.subviews.first as? ContainerView }
     private lazy var separatorView: SeparatorView = self.makeSeparatorView()
@@ -30,7 +29,9 @@ public final class Panel: UIViewController {
     // MARK: - Properties
 
     @objc private(set) public lazy var panelView: PanelView = self.makePanelView()
-    @objc public var isVisible: Bool { return self.parent != nil && self.animator.isTransitioningFromParent == false }
+    @objc private(set) public lazy var resizeHandle: ResizeHandle = self.makeResizeHandle()
+    @objc public var isVisible: Bool { return self.parent != nil && self.animator.isMovingFromParent == false }
+    @objc public var isResizing: Bool { return self.gestures.isVerticalPanActive }
     public weak var sizeDelegate: PanelSizeDelegate?
     public weak var resizeDelegate: PanelResizeDelegate?
     public weak var repositionDelegate: PanelRepositionDelegate?
@@ -50,7 +51,6 @@ public final class Panel: UIViewController {
 
     @objc public var contentViewController: UIViewController? {
         didSet {
-            self.updateContentViewControllerFrame(of: self.contentViewController)
             self.exchangeContentViewController(oldValue, with: self.contentViewController)
             self.view.setNeedsLayout()
             self.fixLayoutMargins()
@@ -80,6 +80,14 @@ public extension Panel {
 
     override var shouldAutomaticallyForwardAppearanceMethods: Bool {
         return false
+    }
+
+    override var isMovingToParent: Bool {
+        return self.animator.isMovingToParent
+    }
+
+    override var isMovingFromParent: Bool {
+        return self.animator.isMovingFromParent
     }
 
     override func loadView() {
@@ -118,13 +126,8 @@ public extension Panel {
             self.separatorView.frame = dividerFrame
         }
 
+        self.contentViewController?.view.frame = self.panelView.contentView.bounds
         self.fixLayoutMargins()
-    }
-
-    override func willTransition(to newCollection: UITraitCollection, with coordinator: UIViewControllerTransitionCoordinator) {
-        // not calling through to contentVC because we set a fixed traitCollection
-        self.gestures.cancel()
-        super.willTransition(to: newCollection, with: coordinator)
     }
 
     override func viewWillTransition(to size: CGSize, with coordinator: UIViewControllerTransitionCoordinator) {
@@ -143,10 +146,10 @@ public extension Panel {
 
 public extension Panel {
 
-    func add(to parent: UIViewController, transition: Transition = .none) {
-        guard self.parent !== parent || self.animator.isTransitioningFromParent else { return }
+    func add(to parent: UIViewController, transition: Transition = .none, completion: (() -> Void)? = nil) {
+        guard self.parent !== parent || self.animator.isMovingFromParent else { return }
 
-        if self.animator.isTransitioningFromParent {
+        if self.animator.isMovingFromParent {
             self.animator.stopCurrentAnimation()
         }
 
@@ -157,29 +160,30 @@ public extension Panel {
         self.didMove(toParent: parent)
 
         let size = self.size(for: self.configuration.mode)
-
-        self.animator.transitionToParent(with: size, transition: transition) {
+        self.animator.addToParent(with: size, transition: transition) {
             contentViewController?.endAppearanceTransition()
             self.updateAccessibility(for: self.configuration.mode)
             self.fixLayoutMargins()
+            completion?()
         }
     }
 
     func removeFromParent(transition: Transition = .none, completion: (() -> Void)? = nil) {
-        guard self.parent != nil || self.animator.isTransitioningToParent else { return }
+        guard self.parent != nil || self.animator.isMovingToParent else { return }
 
         if let repositionDelegate = self.repositionDelegate {
             guard repositionDelegate.panelCanBeDismissed(self) else { return }
         }
 
-        if self.animator.isTransitioningToParent {
+        if self.animator.isMovingToParent {
             self.animator.stopCurrentAnimation()
         }
 
-        self.contentViewController?.beginAppearanceTransition(false, animated: transition.isAnimated)
+        let contentViewController = self.contentViewController
+        contentViewController?.beginAppearanceTransition(false, animated: transition.isAnimated)
         self.willMove(toParent: nil)
         self.animator.removeFromParent(transition: transition) {
-            self.contentViewController?.endAppearanceTransition()
+            contentViewController?.endAppearanceTransition()
             self.view.removeFromSuperview()
             self.removeFromParent()
             completion?()
@@ -352,15 +356,8 @@ private extension Panel {
 
 private extension Panel {
 
-    func updateContentViewControllerFrame(of contentViewController: UIViewController?) {
-        guard let contentViewController = contentViewController else { return }
-
-        contentViewController.view.frame = self.panelView.contentView.bounds
-        contentViewController.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-    }
-
     func exchangeContentViewController(_ oldContentViewController: UIViewController?, with newContentViewController: UIViewController?) {
-        let callAppearanceMethods = self.isVisible
+        let callAppearanceMethods = self.isVisible || self.isMovingToParent
 
         // remove old contentViewController
         if let oldContentViewController = oldContentViewController {
@@ -375,6 +372,8 @@ private extension Panel {
         if let newContentViewController = newContentViewController {
             if callAppearanceMethods { newContentViewController.beginAppearanceTransition(true, animated: false) }
             self.addChild(newContentViewController)
+            newContentViewController.view.translatesAutoresizingMaskIntoConstraints = true
+            newContentViewController.view.frame = self.panelView.contentView.bounds
             self.panelView.contentView.addSubview(newContentViewController.view)
             newContentViewController.didMove(toParent: self)
             if callAppearanceMethods { newContentViewController.endAppearanceTransition() }
@@ -389,14 +388,15 @@ private extension Panel {
         self.separatorView.configure(with: newConfiguration)
         self.gestures.configure(with: newConfiguration)
 
+        guard self.isVisible else { return }
+
         let modeChanged = oldConfiguration.mode != newConfiguration.mode
         let positionChanged = oldConfiguration.position != newConfiguration.position
         let marginsChanged = oldConfiguration.margins != newConfiguration.margins
         let positionLogicChanged = oldConfiguration.positionLogic != newConfiguration.positionLogic
         let gestureResizingModeChanged = oldConfiguration.gestureResizingMode != newConfiguration.gestureResizingMode
-        let horizontalPositioningChanged = oldConfiguration.isHorizontalPositioningEnabled != newConfiguration.isHorizontalPositioningEnabled
 
-        if modeChanged || positionChanged || marginsChanged || positionLogicChanged || gestureResizingModeChanged || horizontalPositioningChanged {
+        if modeChanged || positionChanged || marginsChanged || positionLogicChanged || gestureResizingModeChanged {
             self.gestures.cancel()
         }
 
